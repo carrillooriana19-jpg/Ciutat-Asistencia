@@ -776,6 +776,10 @@ const SK_ATL = 'wpa_atletas', SK_ENT = 'wpa_entrenadores', SK_REG = 'wpa_registr
       SK_ADMINPASS = 'wpa_adminpass', SK_SESION = 'wpa_sesion', SK_VER = 'wpa_ver', SK_TOKEN = 'wpa_synctoken';
 const DATA_VERSION = '2-equipos-bajas';
 const DEFAULT_ADMIN_PASS = 'ciutat2026';
+// Código de sincronización fijo del club: viene incluido en el propio archivo,
+// así cualquier dispositivo que abra esta app se conecta automáticamente a los
+// mismos datos sin que nadie tenga que escribir ni activar nada manualmente.
+const DEFAULT_SYNC_TOKEN = 'asistencia-ciutatwaterpolo-2026-2027';
 
 let atletas = [];        // {id, nombre, categoria, estado: 'activo'|'baja'}
 let entrenadores = [];   // {id, usuario, passHash, nombre, categorias:[...], debeCambiarPass:true/false, activo:true}
@@ -783,7 +787,7 @@ let registros = [];      // {id, atletaId, fecha:'YYYY-MM-DD', estado:'asistio'|
 let equipos = [];        // {id, nombre, categorias:[...], creadoPor}
 let nextIdEnt = 1, nextIdReg = 1, nextIdEq = 1;
 let sesion = null; // { tipo:'admin' } o { tipo:'entrenador', usuario, nombre, categorias }
-let syncEnabled = false, syncUnsubscribe = null, lastPushedSnapshot = null;
+let syncEnabled = false, syncUnsubscribe = null, lastPushedSnapshot = null, syncListo = false;
 
 function simpleHash(str) {
   let h = 0;
@@ -800,7 +804,14 @@ function todayStr() {
 }
 
 /* ---------- PERSISTENCIA ---------- */
-function syncToken() { return localStorage.getItem(SK_TOKEN) || ''; }
+function syncToken() {
+  const stored = localStorage.getItem(SK_TOKEN);
+  if (stored) return stored;
+  // Primera vez en este dispositivo: usamos el código fijo del club y lo
+  // guardamos localmente para no tener que repetir esta lógica cada vez.
+  localStorage.setItem(SK_TOKEN, DEFAULT_SYNC_TOKEN);
+  return DEFAULT_SYNC_TOKEN;
+}
 
 function save() {
   try {
@@ -911,6 +922,7 @@ function loginEntrenador() {
   const usuario = document.getElementById('login-user').value.trim().toLowerCase();
   const pass = document.getElementById('login-pass').value;
   const err = document.getElementById('login-error');
+  if (!syncListo) { err.textContent = 'Todavía estamos conectando con los datos del club, espera un momento e inténtalo de nuevo.'; return; }
   if (!usuario || !pass) { err.textContent = 'Introduce usuario y contraseña.'; return; }
   const ent = entrenadores.find(e => e.usuario.toLowerCase() === usuario);
   if (!ent || !ent.activo) { err.textContent = 'Usuario no encontrado.'; return; }
@@ -945,9 +957,19 @@ function guardarPrimeraPassword() {
   onAuthenticated();
 }
 
-function initAuth() {
+async function initAuth() {
   load();
   const rs = localStorage.getItem(SK_SESION);
+
+  const syncStatusEl = document.getElementById('sync-status');
+  if (syncStatusEl) syncStatusEl.textContent = 'Conectando con los datos del club...';
+  document.querySelectorAll('.btn-primary').forEach(b => { if (b.closest('#login-overlay')) b.disabled = true; });
+
+  if (syncToken()) await iniciarSync(false);
+  syncListo = true;
+  document.querySelectorAll('.btn-primary').forEach(b => { if (b.closest('#login-overlay')) b.disabled = false; });
+  if (syncStatusEl) syncStatusEl.textContent = syncEnabled ? '' : 'No se pudo conectar a la nube; usando datos guardados en este dispositivo.';
+
   if (rs) {
     try {
       sesion = JSON.parse(rs);
@@ -960,7 +982,6 @@ function initAuth() {
     } catch(e) { sesion = null; }
   }
   if (sesion) { onAuthenticated(); }
-  if (syncToken()) iniciarSync(false);
 }
 
 function onAuthenticated() {
